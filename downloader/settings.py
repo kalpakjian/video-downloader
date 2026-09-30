@@ -1,4 +1,7 @@
-"""Small atomic settings file; never store URLs, history, or credentials."""
+"""Small atomic settings file; never store URLs, history, or credential material.
+
+cookies_file 只是一個指向使用者自行管理之 cookies.txt 的路徑，設定檔本身不含任何憑證。
+"""
 
 import json
 import os
@@ -37,7 +40,7 @@ def default_download_dir() -> Path:
 
 
 def load_settings() -> dict[str, str]:
-    defaults = {"output_dir": str(default_download_dir()), "profile": "best"}
+    defaults = {"output_dir": str(default_download_dir()), "profile": "best", "cookies_file": ""}
     try:
         raw = json.loads((data_dir() / "settings.json").read_text(encoding="utf-8"))
         if isinstance(raw, dict):
@@ -46,13 +49,17 @@ def load_settings() -> dict[str, str]:
                 defaults["output_dir"] = folder
             if isinstance(raw.get("profile"), str) and raw["profile"] in PROFILE_BY_ID:
                 defaults["profile"] = raw["profile"]
+            cookies = raw.get("cookies_file")
+            if isinstance(cookies, str) and cookies and "\x00" not in cookies:
+                defaults["cookies_file"] = cookies
     except (OSError, ValueError, TypeError):
         pass
     return defaults
 
 
 def save_settings(settings: dict[str, str]) -> None:
-    payload = {"output_dir": str(settings["output_dir"]), "profile": settings["profile"]}
+    payload = {"output_dir": str(settings["output_dir"]), "profile": settings["profile"],
+               "cookies_file": str(settings.get("cookies_file", ""))}
     root = data_dir()
     root.mkdir(parents=True, exist_ok=True)
     fd, temp = tempfile.mkstemp(prefix="settings-", suffix=".tmp", dir=root)

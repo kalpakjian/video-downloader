@@ -1,4 +1,4 @@
-"""Downloader CLI adapter: typed events, cancellable child jobs, no shell."""
+﻿"""Downloader CLI adapter: typed events, cancellable child jobs, no shell."""
 
 from collections import deque
 import json
@@ -72,8 +72,14 @@ def parse_event(line: str) -> dict | None:
             "eta": eta_text, "phase": phase}
 
 
-def friendly_error(text: str, profile: str = "best") -> str:
+def friendly_error(text: str, profile: str = "best", cookies: bool = False) -> str:
     value = text.lower()
+    if any(word in value for word in ("no video could be found in this tweet", "tweettombstone",
+                                     "tombstone", "sensitive-media", "age-restricted")):
+        base = "此 X（Twitter）貼文對未登入訪客隱藏，多為敏感或年齡限制內容，X 僅開放給已登入使用者觀看。"
+        if cookies:
+            return base + "已使用指定的 cookies.txt 仍無法取得，cookie 可能已過期或失效，請重新匯出後再試。"
+        return base + "如需下載此類內容，請在主畫面第 4 步指定你自行匯出的 cookies.txt；本工具不會自動讀取帳號或 Cookie。"
     if any(word in value for word in ("sign in", "login", "log in", "cookies", "private video", "authentication")):
         return "平台要求登入或驗證，或影片不是公開內容。本工具不會自動讀取帳號或 Cookie；請改用可公開取得的影片。"
     if "drm" in value:
@@ -119,6 +125,14 @@ def build_common_args(request: DownloadRequest, tools: dict) -> list[str]:
             "--extractor-retries", "2", "--abort-on-unavailable-fragments",
             "--encoding", "utf-8", "--color", "never", "--no-update",
             "--ffmpeg-location", str(Path(tools["ffmpeg"]).parent), "--format", profile.selector]
+    cookies = (getattr(request, "cookies", "") or "").strip()
+    if cookies:
+        if "\x00" in cookies:
+            raise DownloadError("cookies 檔案路徑無效，請重新選擇或清空該欄位。")
+        cookie_path = Path(cookies).expanduser()
+        if not cookie_path.is_absolute() or not cookie_path.is_file():
+            raise DownloadError("找不到指定的 cookies.txt 檔案。請重新匯出，或清空欄位改用匿名下載。")
+        args.extend(("--cookies", str(cookie_path)))
     if tools.get("node"):
         args.extend(("--js-runtimes", f"node:{tools['node']}"))
     return args
@@ -235,7 +249,7 @@ class DownloadEngine:
         result = self._execute(common + ["--dump-single-json", "--skip-download", "--flat-playlist",
                                          "--playlist-end", "1", "--", validate_url(request.url)], metadata_line)
         if result:
-            raise DownloadError(friendly_error("\n".join(errors), request.profile))
+            raise DownloadError(friendly_error("\n".join(errors), request.profile, bool(getattr(request, "cookies", ""))))
         if not metadata:
             raise DownloadError("下載核心未回傳影片資訊；請更新核心或換一個影片網址。")
         if metadata.get("_type") in {"playlist", "multi_video"} or "entries" in metadata:
@@ -277,7 +291,7 @@ class DownloadEngine:
         result = self._execute(args, download_line)
         self._check_cancel()
         if result:
-            raise DownloadError(friendly_error("\n".join(errors), request.profile))
+            raise DownloadError(friendly_error("\n".join(errors), request.profile, bool(getattr(request, "cookies", ""))))
         if not final_paths:
             raise DownloadError("核心已結束，但沒有確認最終輸出檔案，未標記為下載成功。")
         verified_paths = []

@@ -16,11 +16,12 @@ if __name__ == "__main__":
         parser.add_argument("--output-dir", type=Path, required=True)
         parser.add_argument("--report", type=Path, required=True)
         parser.add_argument("--profile", choices=tuple(PROFILE_BY_ID), default="best")
+        parser.add_argument("--cookies", default="", help="選用的 cookies.txt 完整路徑")
         args = parser.parse_args()
         events = []
         error = None
         try:
-            DownloadEngine(events.append).run(DownloadRequest(args.diagnose_url, args.output_dir, args.profile))
+            DownloadEngine(events.append).run(DownloadRequest(args.diagnose_url, args.output_dir, args.profile, args.cookies))
         except Exception as exc:
             error = str(exc)
         args.report.parent.mkdir(parents=True, exist_ok=True)

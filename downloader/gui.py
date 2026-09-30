@@ -27,6 +27,7 @@ class DownloaderApp:
         settings = load_settings()
         self.url = tk.StringVar()
         self.folder = tk.StringVar(value=settings["output_dir"])
+        self.cookies = tk.StringVar(value=settings.get("cookies_file", ""))
         self.profile = tk.StringVar(value=next(p.label for p in PROFILES if p.id == settings["profile"]))
         self.description = tk.StringVar()
         self.status = tk.StringVar(value="準備就緒，請貼上單支影片網址。")
@@ -53,7 +54,7 @@ class DownloaderApp:
         frame = ttk.Frame(root, padding=24)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(13, weight=1)
+        frame.rowconfigure(16, weight=1)
         ttk.Label(frame, text="下載影片", style="Title.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(frame, text="貼上網址・選擇格式・存到電腦　｜　無廣告，不需註冊本工具帳號\nYouTube · Instagram · Facebook · X · TikTok（依核心與平台限制）").grid(row=1, column=0, sticky="w", pady=(2, 16))
         ttk.Label(frame, text="1　影片網址", style="Heading.TLabel").grid(row=2, column=0, sticky="w")
@@ -77,8 +78,18 @@ class DownloaderApp:
         self.folder_entry.grid(row=0, column=0, sticky="ew", ipady=5)
         self.browse_button = ttk.Button(folder_row, text="選擇資料夾…", command=self.browse)
         self.browse_button.grid(row=0, column=1, padx=(8, 0))
+        ttk.Label(frame, text="4　進階（選用）：cookies.txt", style="Heading.TLabel").grid(row=9, column=0, sticky="w")
+        cookie_row = ttk.Frame(frame)
+        cookie_row.grid(row=10, column=0, sticky="ew", pady=(6, 4))
+        cookie_row.columnconfigure(0, weight=1)
+        self.cookies_entry = ttk.Entry(cookie_row, textvariable=self.cookies)
+        self.cookies_entry.grid(row=0, column=0, sticky="ew", ipady=5)
+        self.cookies_button = ttk.Button(cookie_row, text="瀏覽…", command=self.browse_cookies)
+        self.cookies_button.grid(row=0, column=1, padx=(8, 0))
+        ttk.Label(frame, text="留空＝一律匿名下載。提供你自行匯出的 cookies.txt 可下載需登入／敏感內容（如 X 受限貼文）；"
+                              "檔案等同帳號鑰匙，僅在本機使用、不會上傳，下載完建議刪除。", wraplength=740).grid(row=11, column=0, sticky="w", pady=(0, 14))
         actions = ttk.Frame(frame)
-        actions.grid(row=9, column=0, sticky="ew", pady=(0, 12))
+        actions.grid(row=12, column=0, sticky="ew", pady=(0, 12))
         self.start_button = ttk.Button(actions, text="開始下載", style="Primary.TButton", command=self.start_download)
         self.start_button.pack(side="left")
         self.cancel_button = ttk.Button(actions, text="取消", command=self.cancel, state="disabled")
@@ -87,17 +98,17 @@ class DownloaderApp:
         self.update_button = ttk.Button(actions, text="更新下載核心", command=self.start_update)
         self.update_button.pack(side="right")
         progress_frame = ttk.Frame(frame)
-        progress_frame.grid(row=10, column=0, sticky="ew")
+        progress_frame.grid(row=13, column=0, sticky="ew")
         ttk.Label(progress_frame, textvariable=self.status, wraplength=740).pack(anchor="w")
         self.progress = ttk.Progressbar(progress_frame, maximum=100)
         self.progress.pack(fill="x", pady=(8, 4))
         ttk.Label(progress_frame, textvariable=self.metrics, wraplength=740).pack(anchor="w")
-        ttk.Label(frame, textvariable=self.tools_status, wraplength=740).grid(row=11, column=0, sticky="w", pady=(8, 8))
-        ttk.Label(frame, text="執行訊息（可能含網址／檔名，分享前請確認）").grid(row=12, column=0, sticky="w")
+        ttk.Label(frame, textvariable=self.tools_status, wraplength=740).grid(row=14, column=0, sticky="w", pady=(8, 8))
+        ttk.Label(frame, text="執行訊息（可能含網址／檔名，分享前請確認）").grid(row=15, column=0, sticky="w")
         self.log = ScrolledText(frame, height=6, wrap="word", state="disabled", background="white",
                                 foreground="#25324b", relief="solid", borderwidth=1, font=("Microsoft JhengHei UI", 9))
-        self.log.grid(row=13, column=0, sticky="nsew", pady=(4, 8))
-        ttk.Label(frame, text="僅下載自己擁有或獲授權保存的內容。公開影片仍可能受登入、地區或平台限制；不解除 DRM。\n第一版僅支援單支影片，不下載播放清單或直播。最高畫質不代表提升來源畫質。", wraplength=740).grid(row=14, column=0, sticky="w")
+        self.log.grid(row=16, column=0, sticky="nsew", pady=(4, 8))
+        ttk.Label(frame, text="僅下載自己擁有或獲授權保存的內容。公開影片仍可能受登入、地區或平台限制；不解除 DRM。\n第一版僅支援單支影片，不下載播放清單或直播。最高畫質不代表提升來源畫質。", wraplength=740).grid(row=17, column=0, sticky="w")
         self.describe_profile()
         self.refresh_tools()
         self.url_entry.focus_set()
@@ -134,6 +145,12 @@ class DownloaderApp:
         if chosen:
             self.folder.set(chosen)
 
+    def browse_cookies(self):
+        chosen = filedialog.askopenfilename(parent=self.root, title="選擇 cookies.txt",
+                                             filetypes=(("cookies 檔案", "*.txt"), ("所有檔案", "*.*")))
+        if chosen:
+            self.cookies.set(chosen)
+
     def open_folder(self):
         try:
             folder = self.last_path.parent if self.last_path else Path(self.folder.get()).expanduser()
@@ -152,7 +169,8 @@ class DownloaderApp:
         self.log.configure(state="disabled")
 
     def set_busy(self, busy):
-        for widget in (self.url_entry, self.paste_button, self.folder_entry, self.browse_button, self.start_button, self.update_button):
+        for widget in (self.url_entry, self.paste_button, self.folder_entry, self.browse_button,
+                       self.cookies_entry, self.cookies_button, self.start_button, self.update_button):
             widget.configure(state="disabled" if busy else "normal")
         self.profile_box.configure(state="disabled" if busy else "readonly")
         self.cancel_button.configure(state="normal" if busy else "disabled")
@@ -166,12 +184,13 @@ class DownloaderApp:
             if not folder.is_absolute() or "\x00" in str(folder):
                 raise DownloadError("請選擇完整的儲存資料夾路徑。")
             profile = self.selected_profile().id
-            request = DownloadRequest(url, folder, profile)
+            cookies = self.cookies.get().strip()
+            request = DownloadRequest(url, folder, profile, cookies)
         except (DownloadError, ValueError) as exc:
             messagebox.showerror("請檢查輸入", str(exc), parent=self.root)
             return
         try:
-            save_settings({"output_dir": str(folder), "profile": profile})
+            save_settings({"output_dir": str(folder), "profile": profile, "cookies_file": cookies})
         except OSError as exc:
             self.append_log(f"偏好設定無法儲存，但仍可下載：{exc}")
         engine = DownloadEngine(self.events.put)

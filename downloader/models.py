@@ -44,6 +44,7 @@ class DownloadRequest:
     url: str
     output_dir: Path
     profile: str = "best"
+    cookies: str = ""  # 選用：使用者自行提供的 cookies.txt 完整路徑
 
 
 def validate_url(value: str) -> str:

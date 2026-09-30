@@ -74,6 +74,19 @@ class ModelTests(unittest.TestCase):
         with self.assertRaises(models.DownloadError):
             engine.build_common_args(models.DownloadRequest(request.url, request.output_dir, "invalid"), TOOL_PATHS)
 
+    def test_cookie_file_arg_added_when_present_and_validated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cookie = Path(tmp) / "cookies.txt"
+            cookie.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            args = engine.build_common_args(models.DownloadRequest("https://example.com/v", Path.cwd(), "best", str(cookie)), TOOL_PATHS)
+            self.assertEqual(args[args.index("--cookies") + 1], str(cookie))
+        with self.subTest(missing="不存在檔案"), self.assertRaises(models.DownloadError):
+            engine.build_common_args(models.DownloadRequest("https://example.com/v", Path.cwd(), "best",
+                                                            str(Path("missing") / "cookies.txt")), TOOL_PATHS)
+        with self.subTest(missing="相對路徑"), self.assertRaises(models.DownloadError):
+            engine.build_common_args(models.DownloadRequest("https://example.com/v", Path.cwd(), "best", "cookies.txt"), TOOL_PATHS)
+        self.assertNotIn("--cookies", engine.build_common_args(models.DownloadRequest("https://example.com/v", Path.cwd()), TOOL_PATHS))
+
     def test_youtube_requires_node_other_sites_do_not(self):
         available = {**TOOL_PATHS, "node": None}
         with self.assertRaises(models.DownloadError):
@@ -131,7 +144,8 @@ class EventTests(unittest.TestCase):
                 self.assertEqual(engine.format_speed(value), expected)
 
     def test_friendly_errors(self):
-        cases = (("SIGN IN required", "登入"), ("DRM protected", "DRM"), ("not available in your country", "地區"),
+        cases = (("No video could be found in this tweet", "敏感"), ("TweetTombstone", "敏感"),
+                 ("SIGN IN required", "登入"), ("DRM protected", "DRM"), ("not available in your country", "地區"),
                  ("requested format unavailable", "畫質"), ("Unsupported URL", "不受"), ("429 Too Many Requests", "頻率"),
                  ("403 Forbidden", "403"), ("Connection timed out", "HTTPS"), ("No space left", "空間"),
                  ("Access is denied", "寫入"), ("404 not found", "移除"), ("unexpected failure", "下載失敗"))
@@ -152,18 +166,25 @@ class SettingsTests(unittest.TestCase):
         patch.object(settings, "default_download_dir", return_value=self.default).start()
 
     def test_missing_settings_defaults(self):
-        self.assertEqual(settings.load_settings(), {"output_dir": str(self.default), "profile": "best"})
+        self.assertEqual(settings.load_settings(), {"output_dir": str(self.default), "profile": "best", "cookies_file": ""})
 
     def test_corrupt_and_wrong_shape_defaults(self):
         for content in ("not json", "[]", "null", '"text"', "{", '{"profile":[],"output_dir":42}'):
             with self.subTest(content=content):
                 (self.root / "settings.json").write_text(content, encoding="utf-8")
-                self.assertEqual(settings.load_settings(), {"output_dir": str(self.default), "profile": "best"})
+                self.assertEqual(settings.load_settings(), {"output_dir": str(self.default), "profile": "best", "cookies_file": ""})
 
     def test_invalid_fields_are_ignored_independently(self):
         for folder in ("relative", "", "bad\x00path"):
             (self.root / "settings.json").write_text(json.dumps({"output_dir": folder, "profile": "720p"}), encoding="utf-8")
-            self.assertEqual(settings.load_settings(), {"output_dir": str(self.default), "profile": "720p"})
+            self.assertEqual(settings.load_settings(), {"output_dir": str(self.default), "profile": "720p", "cookies_file": ""})
+
+    def test_cookie_path_roundtrip(self):
+        path = str(self.root / "cookies.txt")
+        settings.save_settings({"output_dir": str(self.default), "profile": "best", "cookies_file": path})
+        self.assertEqual(settings.load_settings()["cookies_file"], path)
+        (self.root / "settings.json").write_text(json.dumps({"cookies_file": 42, "profile": "best"}), encoding="utf-8")
+        self.assertEqual(settings.load_settings()["cookies_file"], "")
 
     def test_atomic_unicode_roundtrip_only_persists_preferences(self):
         payload = {"output_dir": str(self.root / "影片"), "profile": "mp4", "url": "https://private.example/"}
@@ -172,12 +193,12 @@ class SettingsTests(unittest.TestCase):
             settings.save_settings(payload)
         replace.assert_called_once()
         self.assertEqual(Path(replace.call_args.args[0]).parent, self.root)
-        self.assertEqual(settings.load_settings(), {key: payload[key] for key in ("output_dir", "profile")})
+        self.assertEqual(settings.load_settings(), {key: payload[key] for key in ("output_dir", "profile")} | {"cookies_file": ""})
         self.assertNotIn("url", json.loads((self.root / "settings.json").read_text(encoding="utf-8")))
         self.assertEqual(list(self.root.glob("settings-*.tmp")), [])
 
     def test_failed_replace_preserves_old_settings_and_cleans_temp(self):
-        initial = {"output_dir": str(self.default), "profile": "best"}
+        initial = {"output_dir": str(self.default), "profile": "best", "cookies_file": ""}
         settings.save_settings(initial)
         with patch.object(settings.os, "replace", side_effect=PermissionError("locked")), self.assertRaises(PermissionError):
             settings.save_settings({**initial, "profile": "mp3"})
