@@ -23,6 +23,16 @@ except ImportError:
 HOTKEY_MODIFIERS = MOD_CONTROL | MOD_ALT | MOD_SHIFT
 HOTKEY_VK = 0x44  # 'D'
 HOTKEY_LABEL = "Ctrl+Alt+Shift+D"
+VK_CONTROL = 0x11
+
+
+def _ctrl_held() -> bool:
+    """True while the physical Ctrl key is down (GetAsyncKeyState high bit)."""
+    try:
+        import ctypes
+        return bool(ctypes.windll.user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
+    except (OSError, AttributeError):
+        return False
 
 
 class DownloaderApp:
@@ -37,6 +47,8 @@ class DownloaderApp:
         self.poll_id = None
         self._tray_icon = None
         self._hotkey = None
+        self._last_clip = None
+        self._clipboard_watch_id = None
         settings = load_settings()
         self.url = tk.StringVar()
         self.folder = tk.StringVar(value=settings["output_dir"])
@@ -122,13 +134,14 @@ class DownloaderApp:
                                 foreground="#25324b", relief="solid", borderwidth=1, font=("Microsoft JhengHei UI", 9))
         self.log.grid(row=16, column=0, sticky="nsew", pady=(4, 8))
         ttk.Label(frame, text="僅下載自己擁有或獲授權保存的內容。公開影片仍可能受登入、地區或平台限制；不解除 DRM。\n第一版僅支援單支影片，不下載播放清單或直播。最高畫質不代表提升來源畫質。", wraplength=740).grid(row=17, column=0, sticky="w")
-        ttk.Label(frame, text=f"全域熱鍵 {HOTKEY_LABEL}：複製影片網址後直接按此鍵即以目前設定開始背景下載，不會打斷目前的操作；關閉視窗會縮到系統匣繼續待命，可由系統匣圖示開啟視窗或結束程式。", wraplength=740).grid(row=18, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(frame, text=f"自動下載：按住 Ctrl 複製（Ctrl+C）任何 http(s) 網址，即自動以目前設定在背景下載，不打斷操作。另有熱鍵 {HOTKEY_LABEL} 可手動觸發。關閉視窗會縮到系統匣繼續待命。", wraplength=740).grid(row=18, column=0, sticky="w", pady=(4, 0))
         if enable_shortcuts and os.name == "nt":
             self._hotkey = GlobalHotkey(HOTKEY_MODIFIERS, HOTKEY_VK,
                                         lambda: self.events.put({"type": "hotkey"}))
             if not self._hotkey.start():
                 self._hotkey = None
                 self.append_log(f"全域熱鍵 {HOTKEY_LABEL} 註冊失敗（可能被其他程式佔用）。")
+            self._clipboard_watch_id = self.root.after(300, self._watch_clipboard_tick)
         self.describe_profile()
         self.refresh_tools()
         self.url_entry.focus_set()
@@ -347,22 +360,41 @@ class DownloaderApp:
     def _is_hidden(self) -> bool:
         return self.root.state() in ("withdrawn", "iconic")
 
-    def hotkey_download(self):
+    def hotkey_download(self, text: str | None = None):
         if self.worker is not None or self.closing:
-            self.status.set("已有工作在執行，已忽略全域熱鍵。")
+            self.status.set("已有工作在執行，已忽略新的下載要求。")
             return
-        try:
-            text = self.root.clipboard_get().strip()
-        except tk.TclError:
-            self.status.set("剪貼簿中沒有文字；請先複製影片網址再按熱鍵。")
-            if self._is_hidden() and self._tray_icon is not None:
-                self._notify("熱鍵下載未開始", "剪貼簿中沒有可用的影片網址。")
+        if text is None:
+            try:
+                text = self.root.clipboard_get().strip()
+            except tk.TclError:
+                self.status.set("剪貼簿中沒有文字；請先複製影片網址再按熱鍵。")
+                if self._is_hidden() and self._tray_icon is not None:
+                    self._notify("熱鍵下載未開始", "剪貼簿中沒有可用的影片網址。")
+                return
+        if not text.lower().startswith(("http://", "https://")):
+            self.status.set("剪貼簿內容不是 http(s) 網址，已忽略。")
             return
         self.url.set(text)
         self.start_download()
         # 純背景下載：不帶出主視窗，只給系統匣輕量提示
         if self._is_hidden() and self.worker is not None and self._ensure_tray_icon():
             self._notify("開始背景下載", text)
+
+    def _watch_clipboard_tick(self):
+        """偵測「按住 Ctrl 複製」的網址：剪貼簿內容改變且 Ctrl 當下仍被按住。"""
+        self._clipboard_watch_id = None
+        if self.closing:
+            return
+        try:
+            text = self.root.clipboard_get().strip()
+        except tk.TclError:
+            text = None
+        if text is not None and text != self._last_clip:
+            self._last_clip = text
+            if text and _ctrl_held() and self.worker is None:
+                self.hotkey_download(text)
+        self._clipboard_watch_id = self.root.after(300, self._watch_clipboard_tick)
 
     def _ensure_tray_icon(self):
         if pystray is None:
@@ -400,6 +432,9 @@ class DownloaderApp:
             self.hide_to_tray()
 
     def destroy(self):
+        if self._clipboard_watch_id is not None:
+            self.root.after_cancel(self._clipboard_watch_id)
+            self._clipboard_watch_id = None
         if self._hotkey is not None:
             self._hotkey.stop()
             self._hotkey = None
