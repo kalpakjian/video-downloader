@@ -33,6 +33,13 @@
 
 影像與音訊可能分開下載，各段百分比會重新計算。合併／轉檔階段顯示不定進度，不將下載完成誤報成最終檔案完成。只有核心成功結束且最終檔案確實存在、非空，才標示成功。
 
+## 全域熱鍵與系統匣
+
+- **全域熱鍵 `Ctrl+Alt+Shift+D`**（刻意避開常用組合）：複製影片網址到剪貼簿後，直接按這組熱鍵，程式會以目前視窗中的格式、儲存位置與 cookies 設定立即開始下載，並自動帶出主視窗顯示進度。剪貼簿沒有文字或已有工作執行中時會忽略並提示。
+- **關閉視窗＝縮小到系統匣**：按右上角 ✕ 不會結束程式，而是縮到系統匣（工作列右下角）繼續待命，熱鍵照常可用。左鍵雙擊或右鍵選單可「開啟主視窗」；要真正結束請由系統匣選單按「結束程式」。
+- 若程式執行中註冊熱鍵失敗（被其他軟體佔用），會在執行訊息中提示；下載功能不受影響。
+- 系統匣功能依賴 `pystray` 與 `Pillow`（原始碼執行需 `pip install pystray Pillow`）。缺少時 ✕ 仍為傳統結束行為，熱鍵不受影響（純標準庫實作）。
+
 ## 如何取得 cookies.txt（選用）
 
 部分內容（最常見是 X／Twitter 的敏感或年齡限制貼文）平台只開放給已登入使用者，匿名下載會失敗或顯示「此貼文對未登入訪客隱藏」。此時可提供你自己的登入 cookies：
@@ -107,7 +114,8 @@ python -m venv 'C:\Users\princ\video-downloader\.venv'
 
 所有下列項目均位於 `C:\Users\princ\video-downloader`：
 
-- `downloader\gui.py`：Tkinter 主執行緒介面、背景工作事件佇列。
+- `downloader\gui.py`：Tkinter 主執行緒介面、背景工作事件佇列、全域熱鍵與系統匣。
+- `downloader\hotkey.py`：Windows RegisterHotKey 全域熱鍵（純 ctypes 標準庫）。
 - `downloader\engine.py`：格式參數、解析、下載、進度與完成驗證。
 - `downloader\processes.py`：Windows Job Object 管理下載與 FFmpeg 子程序。
 - `downloader\tools.py`：工具偵測、HTTPS 核心更新與 SHA-256 驗證。

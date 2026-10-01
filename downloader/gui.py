@@ -9,13 +9,24 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from .engine import DownloadEngine
+from .hotkey import MOD_ALT, MOD_CONTROL, MOD_SHIFT, GlobalHotkey
 from .models import DownloadCancelled, DownloadError, DownloadRequest, PROFILES, validate_url
 from .settings import load_settings, save_settings
 from .tools import ToolManager
 
+try:  # 系統匣為選用功能：缺少套件時關閉視窗即結束，行為與舊版相同
+    import pystray
+    from PIL import Image, ImageDraw
+except ImportError:
+    pystray = None
+
+HOTKEY_MODIFIERS = MOD_CONTROL | MOD_ALT | MOD_SHIFT
+HOTKEY_VK = 0x44  # 'D'
+HOTKEY_LABEL = "Ctrl+Alt+Shift+D"
+
 
 class DownloaderApp:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, enable_shortcuts: bool = False):
         self.root = root
         self.events = queue.Queue()
         self.worker = None
@@ -24,6 +35,8 @@ class DownloaderApp:
         self.finished = False
         self.last_path = None
         self.poll_id = None
+        self._tray_icon = None
+        self._hotkey = None
         settings = load_settings()
         self.url = tk.StringVar()
         self.folder = tk.StringVar(value=settings["output_dir"])
@@ -109,6 +122,13 @@ class DownloaderApp:
                                 foreground="#25324b", relief="solid", borderwidth=1, font=("Microsoft JhengHei UI", 9))
         self.log.grid(row=16, column=0, sticky="nsew", pady=(4, 8))
         ttk.Label(frame, text="僅下載自己擁有或獲授權保存的內容。公開影片仍可能受登入、地區或平台限制；不解除 DRM。\n第一版僅支援單支影片，不下載播放清單或直播。最高畫質不代表提升來源畫質。", wraplength=740).grid(row=17, column=0, sticky="w")
+        ttk.Label(frame, text=f"全域熱鍵 {HOTKEY_LABEL}：複製影片網址後直接按此鍵即以目前設定開始下載。關閉視窗會縮到系統匣繼續待命，可由系統匣圖示開啟視窗或結束程式。", wraplength=740).grid(row=18, column=0, sticky="w", pady=(4, 0))
+        if enable_shortcuts and os.name == "nt":
+            self._hotkey = GlobalHotkey(HOTKEY_MODIFIERS, HOTKEY_VK,
+                                        lambda: self.events.put({"type": "hotkey"}))
+            if not self._hotkey.start():
+                self._hotkey = None
+                self.append_log(f"全域熱鍵 {HOTKEY_LABEL} 註冊失敗（可能被其他程式佔用）。")
         self.describe_profile()
         self.refresh_tools()
         self.url_entry.focus_set()
@@ -241,7 +261,14 @@ class DownloaderApp:
 
     def handle_event(self, event):
         kind = event.get("type")
-        if kind == "log":
+        if kind == "hotkey":
+            self.hotkey_download()
+        elif kind == "tray":
+            if event.get("action") == "show":
+                self.root.deiconify()
+            elif event.get("action") == "quit":
+                self.close()
+        elif kind == "log":
             self.append_log(event.get("message", ""))
         elif kind == "status":
             self.status.set(event.get("message", ""))
@@ -301,6 +328,43 @@ class DownloaderApp:
             return
         self.poll_id = self.root.after(100, self.poll)
 
+    def hotkey_download(self):
+        if self.worker is not None or self.closing:
+            self.status.set("已有工作在執行，已忽略全域熱鍵。")
+            return
+        try:
+            text = self.root.clipboard_get().strip()
+        except tk.TclError:
+            self.status.set("剪貼簿中沒有文字；請先複製影片網址再按熱鍵。")
+            return
+        self.url.set(text)
+        self.root.deiconify()
+        self.start_download()
+
+    def _ensure_tray_icon(self):
+        if pystray is None:
+            return False
+        if self._tray_icon is None:
+            image = Image.new("RGB", (64, 64), "#514ce3")
+            draw = ImageDraw.Draw(image)
+            draw.polygon([(24, 12), (24, 40), (40, 40), (40, 52), (56, 32), (40, 12), (40, 24), (32, 24), (32, 12)], fill="white")
+            menu = pystray.Menu(
+                pystray.MenuItem("開啟主視窗", lambda: self.events.put({"type": "tray", "action": "show"}), default=True),
+                pystray.MenuItem("結束程式", lambda: self.events.put({"type": "tray", "action": "quit"})),
+            )
+            self._tray_icon = pystray.Icon("VideoDownloader", image, f"下載影片（熱鍵 {HOTKEY_LABEL}）", menu)
+            self._tray_icon.run_detached()
+        else:
+            self._tray_icon.visible = True
+        return True
+
+    def hide_to_tray(self):
+        if self._ensure_tray_icon():
+            self.root.withdraw()
+            self.status.set(f"已縮小到系統匣待命；複製網址後按 {HOTKEY_LABEL} 即可直接下載。")
+        else:
+            self.destroy()
+
     def close(self):
         if self.closing:
             return
@@ -310,9 +374,18 @@ class DownloaderApp:
             self.closing = True
             self.cancel()
         else:
-            self.destroy()
+            self.hide_to_tray()
 
     def destroy(self):
+        if self._hotkey is not None:
+            self._hotkey.stop()
+            self._hotkey = None
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.stop()
+            except Exception:
+                pass
+            self._tray_icon = None
         self.progress.stop()
         if self.poll_id is not None:
             self.root.after_cancel(self.poll_id)
@@ -328,7 +401,7 @@ def main():
         except (AttributeError, OSError):
             ctypes.windll.user32.SetProcessDPIAware()
     root = tk.Tk()
-    DownloaderApp(root)
+    DownloaderApp(root, enable_shortcuts=True)
     root.mainloop()
 
 

@@ -206,6 +206,27 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(list(self.root.glob("settings-*.tmp")), [])
 
 
+@unittest.skipUnless(os.name == "nt", "Windows hotkey ABI")
+class HotkeyTests(unittest.TestCase):
+    def test_callback_dispatch_and_clean_stop(self):
+        import ctypes
+        import time
+        from downloader import hotkey
+        calls = []
+        hk = hotkey.GlobalHotkey(hotkey.MOD_CONTROL | hotkey.MOD_ALT | hotkey.MOD_SHIFT, 0x44,
+                                 lambda: calls.append(1))
+        self.addCleanup(hk.stop)
+        self.assertTrue(hk.start())
+        # 注入一個假的 WM_HOTKEY 訊息到熱鍵執行緒，驗證 callback 派發
+        ctypes.windll.user32.PostThreadMessageW(hk._thread.ident, hotkey.WM_HOTKEY, hk._id, 0)
+        deadline = time.monotonic() + 3
+        while not calls and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(calls, [1])
+        hk.stop()
+        self.assertFalse(hk._thread.is_alive() or hk._thread.is_alive() is None)
+
+
 class ToolTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
