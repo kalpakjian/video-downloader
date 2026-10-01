@@ -122,7 +122,7 @@ class DownloaderApp:
                                 foreground="#25324b", relief="solid", borderwidth=1, font=("Microsoft JhengHei UI", 9))
         self.log.grid(row=16, column=0, sticky="nsew", pady=(4, 8))
         ttk.Label(frame, text="僅下載自己擁有或獲授權保存的內容。公開影片仍可能受登入、地區或平台限制；不解除 DRM。\n第一版僅支援單支影片，不下載播放清單或直播。最高畫質不代表提升來源畫質。", wraplength=740).grid(row=17, column=0, sticky="w")
-        ttk.Label(frame, text=f"全域熱鍵 {HOTKEY_LABEL}：複製影片網址後直接按此鍵即以目前設定開始下載。關閉視窗會縮到系統匣繼續待命，可由系統匣圖示開啟視窗或結束程式。", wraplength=740).grid(row=18, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(frame, text=f"全域熱鍵 {HOTKEY_LABEL}：複製影片網址後直接按此鍵即以目前設定開始背景下載，不會打斷目前的操作；關閉視窗會縮到系統匣繼續待命，可由系統匣圖示開啟視窗或結束程式。", wraplength=740).grid(row=18, column=0, sticky="w", pady=(4, 0))
         if enable_shortcuts and os.name == "nt":
             self._hotkey = GlobalHotkey(HOTKEY_MODIFIERS, HOTKEY_VK,
                                         lambda: self.events.put({"type": "hotkey"}))
@@ -289,6 +289,9 @@ class DownloaderApp:
             self.progress.stop()
             self.progress.configure(mode="determinate", value=100)
             self.append_log(f"完成：{self.last_path}")
+            if self._is_hidden():
+                self._ensure_tray_icon()
+                self._notify("下載完成", self.last_path.name)
         elif kind == "updated":
             self.status.set(f"下載核心已更新至 {event['version']}。")
             self.metrics.set("已通過官方 SHA-256 與版本驗證。")
@@ -300,8 +303,13 @@ class DownloaderApp:
             self.metrics.set("")
             self.status.set("已取消。" if kind == "cancelled" else "工作未完成，請查看下方說明。")
             self.append_log(event["message"])
-            if kind == "error" and not self.closing:
-                messagebox.showerror("無法完成", event["message"], parent=self.root)
+            if kind == "error":
+                if self._is_hidden():
+                    # 背景模式下不打斷使用者，改用系統匣通知
+                    self._ensure_tray_icon()
+                    self._notify("下載失敗", event["message"])
+                elif not self.closing:
+                    messagebox.showerror("無法完成", event["message"], parent=self.root)
         elif kind == "finished":
             self.finished = True
 
@@ -328,6 +336,17 @@ class DownloaderApp:
             return
         self.poll_id = self.root.after(100, self.poll)
 
+    def _notify(self, title: str, message: str):
+        if self._tray_icon is None:
+            return
+        try:
+            self._tray_icon.notify(message[:200], title)
+        except Exception:
+            pass
+
+    def _is_hidden(self) -> bool:
+        return self.root.state() in ("withdrawn", "iconic")
+
     def hotkey_download(self):
         if self.worker is not None or self.closing:
             self.status.set("已有工作在執行，已忽略全域熱鍵。")
@@ -336,10 +355,14 @@ class DownloaderApp:
             text = self.root.clipboard_get().strip()
         except tk.TclError:
             self.status.set("剪貼簿中沒有文字；請先複製影片網址再按熱鍵。")
+            if self._is_hidden() and self._tray_icon is not None:
+                self._notify("熱鍵下載未開始", "剪貼簿中沒有可用的影片網址。")
             return
         self.url.set(text)
-        self.root.deiconify()
         self.start_download()
+        # 純背景下載：不帶出主視窗，只給系統匣輕量提示
+        if self._is_hidden() and self.worker is not None and self._ensure_tray_icon():
+            self._notify("開始背景下載", text)
 
     def _ensure_tray_icon(self):
         if pystray is None:
